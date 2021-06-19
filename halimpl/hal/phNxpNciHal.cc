@@ -1248,7 +1248,7 @@ static void phNxpNciHal_read_complete(void* pContext,
  * Returns          Always returns NFCSTATUS_SUCCESS (0).
  *
  ******************************************************************************/
-int phNxpNciHal_core_initialized(uint8_t* p_core_init_rsp_params) {
+int phNxpNciHal_core_initialized(uint16_t core_init_rsp_params_len, uint8_t* p_core_init_rsp_params) {
   NFCSTATUS status = NFCSTATUS_SUCCESS;
   static uint8_t p2p_listen_mode_routing_cmd[] = {0x21, 0x01, 0x07, 0x00, 0x01,
                                                   0x01, 0x03, 0x00, 0x01, 0x05};
@@ -1288,7 +1288,8 @@ int phNxpNciHal_core_initialized(uint8_t* p_core_init_rsp_params) {
   if (nxpncihal_ctrl.halStatus != HAL_STATUS_OPEN) {
     return NFCSTATUS_FAILED;
   }
-  if ((*p_core_init_rsp_params > 0) &&
+  if (core_init_rsp_params_len >= 1 &&
+      (*p_core_init_rsp_params > 0) &&
       (*p_core_init_rsp_params < 4))  // initializing for recovery.
   {
   retry_core_init:
@@ -1722,7 +1723,8 @@ int phNxpNciHal_core_initialized(uint8_t* p_core_init_rsp_params) {
   config_access = false;
   // if recovery mode and length of last command is 0 then only reset the P2P
   // listen mode routing.
-  if ((*p_core_init_rsp_params > 0) && (*p_core_init_rsp_params < 4) &&
+  if (core_init_rsp_params_len >= 36 &&
+      (*p_core_init_rsp_params > 0) && (*p_core_init_rsp_params < 4) &&
       p_core_init_rsp_params[35] == 0) {
     /* P2P listen mode routing */
     status = phNxpNciHal_send_ext_cmd(sizeof(p2p_listen_mode_routing_cmd),
@@ -1784,7 +1786,8 @@ int phNxpNciHal_core_initialized(uint8_t* p_core_init_rsp_params) {
     }
   }
 
-  if ((*p_core_init_rsp_params > 0) && (*p_core_init_rsp_params < 4)) {
+  if (core_init_rsp_params_len >= 1 &&
+      (*p_core_init_rsp_params > 0) && (*p_core_init_rsp_params < 4)) {
     static phLibNfc_Message_t msg;
     uint16_t tmp_len = 0;
     uint8_t uicc_set_mode[] = {0x22, 0x01, 0x02, 0x02, 0x01};
@@ -1823,7 +1826,8 @@ int phNxpNciHal_core_initialized(uint8_t* p_core_init_rsp_params) {
       goto retry_core_init;
     }
 
-    if (*(p_core_init_rsp_params + 1) == 1)  // RF state is Discovery!!
+    if (core_init_rsp_params_len >= 4 &&
+        *(p_core_init_rsp_params + 1) == 1)  // RF state is Discovery!!
     {
       NXPLOG_NCIHAL_W("Sending Set Screen ON State Command as raw packet!!");
       status =
@@ -1835,6 +1839,9 @@ int phNxpNciHal_core_initialized(uint8_t* p_core_init_rsp_params) {
         goto retry_core_init;
       }
 
+      if (p_core_init_rsp_params[2] > (core_init_rsp_params_len - 3)) {
+        return NFCSTATUS_FAILED;
+      }
       NXPLOG_NCIHAL_W("Sending discovery as raw packet!!");
       status = phNxpNciHal_send_ext_cmd(p_core_init_rsp_params[2],
                                         (uint8_t*)&p_core_init_rsp_params[3]);
@@ -1858,7 +1865,8 @@ int phNxpNciHal_core_initialized(uint8_t* p_core_init_rsp_params) {
     }
     NXPLOG_NCIHAL_W("Sending last command for Recovery ");
 
-    if (p_core_init_rsp_params[35] > 0) {  // if length of last command is 0
+    if (core_init_rsp_params_len >= 40 &&
+        p_core_init_rsp_params[35] > 0) {  // if length of last command is 0
                                            // then it doesn't need to send last
                                            // command.
       if (!(((p_core_init_rsp_params[36] == 0x21) &&
@@ -1895,7 +1903,9 @@ int phNxpNciHal_core_initialized(uint8_t* p_core_init_rsp_params) {
         }
 
         p_core_init_rsp_params[35] = (uint8_t)tmp_len;
-
+        if (p_core_init_rsp_params[35] > (core_init_rsp_params_len - 36)) {
+          return NFCSTATUS_FAILED;
+        }
         status = phNxpNciHal_send_ext_cmd(
             p_core_init_rsp_params[35], (uint8_t*)&p_core_init_rsp_params[36]);
         if (status != NFCSTATUS_SUCCESS) {
@@ -1916,13 +1926,14 @@ int phNxpNciHal_core_initialized(uint8_t* p_core_init_rsp_params) {
   // initialize dummy FW recovery variables
   gRecFWDwnld = 0;
   gRecFwRetryCount = 0;
-  if (!((*p_core_init_rsp_params > 0) && (*p_core_init_rsp_params < 4)))
+  if (core_init_rsp_params_len >= 1 &&
+      !((*p_core_init_rsp_params > 0) && (*p_core_init_rsp_params < 4)))
     phNxpNciHal_core_initialized_complete(status);
   else {
   invoke_callback:
     config_access = false;
     if (nxpncihal_ctrl.p_nfc_stack_data_cback != NULL) {
-      *p_core_init_rsp_params = 0;
+      if (core_init_rsp_params_len) *p_core_init_rsp_params = 0;
       NXPLOG_NCIHAL_W("Invoking data callback!!");
       (*nxpncihal_ctrl.p_nfc_stack_data_cback)(nxpncihal_ctrl.rx_data_len,
                                                nxpncihal_ctrl.p_rx_data);
@@ -3210,21 +3221,36 @@ static void phNxpNciHal_print_res_status(uint8_t* p_rx_data, uint16_t* p_len) {
       NXPLOG_NCIHAL_D("%s: response status =%s", __func__, response_buf[11]);
     }
     if (phNxpNciClock.isClockSet) {
-      int i;
-      for (i = 0; i < *p_len; i++) {
+      int i, len = sizeof(phNxpNciClock.p_rx_data);
+      if (*p_len > len) {
+        android_errorWriteLog(0x534e4554, "169257710");
+      } else {
+        len = *p_len;
+      }
+      for (i = 0; i < len; i++) {
         phNxpNciClock.p_rx_data[i] = p_rx_data[i];
       }
     }
 
     else if (phNxpNciRfSet.isGetRfSetting) {
-      int i;
-      for (i = 0; i < *p_len; i++) {
+      int i, len = sizeof(phNxpNciRfSet.p_rx_data);
+      if (*p_len > len) {
+        android_errorWriteLog(0x534e4554, "169258733");
+      } else {
+        len = *p_len;
+      }
+      for (i = 0; i < len; i++) {
         phNxpNciRfSet.p_rx_data[i] = p_rx_data[i];
         // NXPLOG_NCIHAL_D("%s: response status =0x%x",__func__,p_rx_data[i]);
       }
     } else if (phNxpNciMwEepromArea.isGetEepromArea) {
-      int i;
-      for (i = 8; i < *p_len; i++) {
+      int i, len = sizeof(phNxpNciMwEepromArea.p_rx_data) + 8;
+      if (*p_len > len) {
+        android_errorWriteLog(0x534e4554, "169258884");
+      } else {
+        len = *p_len;
+      }
+      for (i = 8; i < len; i++) {
         phNxpNciMwEepromArea.p_rx_data[i - 8] = p_rx_data[i];
       }
     } else if (nxpncihal_ctrl.phNxpNciGpioInfo.state == GPIO_STORE) {
@@ -3236,7 +3262,7 @@ static void phNxpNciHal_print_res_status(uint8_t* p_rx_data, uint16_t* p_len) {
         nxpncihal_ctrl.phNxpNciGpioInfo.values[0] = p_rx_data[9];
         nxpncihal_ctrl.phNxpNciGpioInfo.values[1] = p_rx_data[8];
     }
-}
+  }
 
   if (p_rx_data[2] && (config_access == true)) {
     if (p_rx_data[3] != NFCSTATUS_SUCCESS) {
